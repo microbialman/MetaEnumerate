@@ -190,14 +190,35 @@ def countFeatures(infiles,outfile):
         paired = False
     #generate counts per orf across all samples
     job_threads = PARAMS["featureCounts_threads"]
+    job_memory = str(PARAMS["featureCounts_memory"])+"G"
     statementlist = [PipelineMetaEnumerate.countFeatures("gene_id",PARAMS["General_gtf_file"],paired,outfile,infiles,PARAMS)]
-    #generate counts for other features specified in params
+    #generate counts for other single annotation features specified in params
     for i in PARAMS["General_feature_list"].split(","):
         statementlist.append(PipelineMetaEnumerate.countFeatures(i,PARAMS["General_gtf_file"],paired,outfile.replace("orf",i),infiles,PARAMS))
+    #generate counts for multi-annotation features specified in params
+    for i in PARAMS["General_multi_feature_list"].split(","):
+        statementlist.append("python {}scripts/demultiFeat.py --orfinput {} --feature {} --gtf {} --output {}".format(os.path.dirname(__file__).rstrip("pipelines"),
+                                                                                                                      outfile,
+                                                                                                                      i,
+                                                                                                                      PARAMS["General_gtf_file"],
+                                                                                                                      outfile.replace("orf",i)))
+    statementlist.append("rm feature_counts.dir/*.summary")
     statement = " && ".join(statementlist)
     P.run()
-    
+
+##########################################
+# Format and normalise count tables
+#########################################
 @follows(countFeatures)
+@follows(mkdir("formatted_counts.dir"))
+@follows(mkdir("formatted_counts.dir/raw_counts"))
+@follows(mkdir("formatted_counts.dir/normalised_counts"))
+@transform("./feature_counts.dir/*",regex(r"feature_counts.dir/(\S+)_counts.txt"),r"formatted_counts.dir/normalised_counts/\1_normalised_counts.tsv")
+def formatCounts(infile,outfile):
+    statement = "Rscript {}scripts/formatCounts.R {} {} {} {}".format(os.path.dirname(__file__).rstrip("pipelines"),re.search("feature_counts.dir/(\S+)_counts.txt",infile).group(1),infile,outfile,outfile.replace("normalised","raw"))
+    P.run()
+    
+@follows(formatCounts)
 def full():
     pass
 
