@@ -11,7 +11,7 @@ import PipelineMetaAssemblyKit
 function to build bowtie database from input fasta
 '''
 def buildBowtieDB(infile,outfile,params):
-    bcall = ["bowtie2-build {} {} -f".format(infile,outfile)]
+    bcall = ["bowtie2-build {} {} -f --large-index".format(infile,outfile)]
     bcall.append("--threads {}".format(params["BowtieDB_threads"]))
     bcall.append("--seed {}".format(params["BowtieDB_seed"]))
     return(" ".join(bcall))

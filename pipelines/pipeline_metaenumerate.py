@@ -94,7 +94,7 @@ Code
 #load modules
 from ruffus import *
 import os, re
-import sys
+import sys, glob
 import subprocess
 
 
@@ -131,7 +131,7 @@ SEQUENCEFILES_REGEX = regex(
 # Make a bowtie indexed database from the contigs
 #######################################################
 @follows(mkdir("contig_database.dir"))
-@transform(PARAMS["General_contig_file"],regex(r"(\S+)/(\S+).(fasta|fa|fna)($|.gz$)"),r"contig_database.dir/\2.bowtie.1.bt2")
+@transform(PARAMS["General_contig_file"],regex(r"(\S+)/(\S+).(fasta|fa|fna)($|.gz$)"),r"contig_database.dir/\2.bowtie.1.bt2l")
 def makeBowtieDb(infile,outfile):
     #check input is a signle end fasta as appropriate
     seqdat = PipelineMetaAssemblyKit.SequencingData(infile)
@@ -139,11 +139,10 @@ def makeBowtieDb(infile,outfile):
         #call to bowtie2-build
         job_memory = str(PARAMS["BowtieDB_memory"])+"G"
         job_threads = PARAMS["BowtieDB_threads"]
-        statement = PipelineMetaEnumerate.buildBowtieDB(infile,outfile.replace(".1.bt2",""),PARAMS)
+        statement = PipelineMetaEnumerate.buildBowtieDB(infile,outfile.replace(".1.bt2l",""),PARAMS)
         P.run()
     else:
         print("Bowtie database can only be constructed from a single end FASTA file. Please check contigfile in parameters.")
-
 
 #######################################################
 # Map each samples reads against the contig database
@@ -175,41 +174,63 @@ def mapSample(infile,outfile):
     statement = " && ".join(statementlist)
     P.run()
 
-
 #################################################################
 # Count reads mapping to each ORF annotation using featureCount
 #################################################################
 @follows(mapSample)
 @follows(mkdir("feature_counts.dir"))
-@merge(mapSample,"feature_counts.dir/orf_counts.txt")
-def countFeatures(infiles,outfile):
+@originate(["feature_counts.dir/{}_counts.txt".format(x) for x in PARAMS["General_feature_list"].split(",")])
+def countFeatures(outfile):
+    feat = re.search("feature_counts.dir/(\S+)_counts.txt",outfile).group(1)
+    samplemappings = [x for x in glob.iglob('sample_mappings.dir/**/*.bam', recursive=True)]
     #get pairdness from first sample
     paired = True
-    num_paired = subprocess.check_output(["samtools","view","-c","-f 1","{}".format(os.getcwd()+"/"+infiles[0])]).decode(sys.stdout.encoding)
+    num_paired = subprocess.check_output(["samtools","view","-c","-f 1","{}".format(os.getcwd()+"/"+samplemappings[0])]).decode(sys.stdout.encoding)
     if int(num_paired.strip("\n")) == 0:
         paired = False
     #generate counts per orf across all samples
     job_threads = PARAMS["featureCounts_threads"]
     job_memory = str(PARAMS["featureCounts_memory"])+"G"
-    statementlist = [PipelineMetaEnumerate.countFeatures("gene_id",PARAMS["General_gtf_file"],paired,outfile,infiles,PARAMS)]
-    #generate counts for other single annotation features specified in params
-    for i in PARAMS["General_feature_list"].split(","):
-        statementlist.append(PipelineMetaEnumerate.countFeatures(i,PARAMS["General_gtf_file"],paired,outfile.replace("orf",i),infiles,PARAMS))
-    #generate counts for multi-annotation features specified in params
-    for i in PARAMS["General_multi_feature_list"].split(","):
-        statementlist.append("python {}scripts/demultiFeat.py --orfinput {} --feature {} --gtf {} --output {}".format(os.path.dirname(__file__).rstrip("pipelines"),
-                                                                                                                      outfile,
-                                                                                                                      i,
+    statement = PipelineMetaEnumerate.countFeatures(feat,PARAMS["General_gtf_file"],paired,outfile,samplemappings,PARAMS)
+    P.run()
+                     
+
+###############################################
+# Do counting for multimapping features
+###############################################
+@follows(countFeatures)
+@originate(["feature_counts.dir/{}_counts.txt".format(x) for x in PARAMS["General_multi_feature_list"].split(",")])
+def countMultiFeatures(outfile):
+    feat = re.search("feature_counts.dir/(\S+)_counts.txt",outfile).group(1)
+    samplemappings = [x for x in glob.iglob('sample_mappings.dir/**/*.bam', recursive=True)]
+    #get pairdness from first sample
+    paired = True
+    num_paired = subprocess.check_output(["samtools","view","-c","-f 1","{}".format(os.getcwd()+"/"+samplemappings[0])]).decode(sys.stdout.encoding)
+    if int(num_paired.strip("\n")) == 0:
+        paired = False
+    #generate counts per orf across all samples
+    job_threads = PARAMS["featureCounts_threads"]
+    job_memory = str(PARAMS["featureCounts_memory"])+"G"
+    statement = "python {}scripts/demultiFeat.py --orfinput {} --feature {} --gtf {} --output {}".format(os.path.dirname(__file__).rstrip("pipelines"),
+                                                                                                                      "feature_counts.dir/gene_id_counts.txt",
+                                                                                                                      feat,
                                                                                                                       PARAMS["General_gtf_file"],
-                                                                                                                      outfile.replace("orf",i)))
-    statementlist.append("rm feature_counts.dir/*.summary")
-    statement = " && ".join(statementlist)
+                                                                                                                      outfile)
     P.run()
 
+####################################
+# Mv feature count summary files
+####################################
+@follows(countMultiFeatures)
+@follows(mkdir("feature_count.summaries"))
+def mvSummaries():
+    statement = "mv feature_counts.dir/*.summary feature_count.summaries/"
+    P.run()
+                 
 ##########################################
 # Format and normalise count tables
 #########################################
-@follows(countFeatures)
+@follows(mvSummaries)
 @follows(mkdir("formatted_counts.dir"))
 @follows(mkdir("formatted_counts.dir/raw_counts"))
 @follows(mkdir("formatted_counts.dir/normalised_counts"))
