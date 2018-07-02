@@ -1,20 +1,23 @@
 library(stringr)
+library(data.table)
 
 #load the counts table
-counts=read.table(commandArgs(trailingOnly=T)[2],sep="\t",header=T)
+counts=fread(commandArgs(trailingOnly=T)[2],sep="\t",header=T)
+counts=as.data.frame(counts)
 
-names=colnames(counts)[7:ncol(counts)]
-m=str_match(names,"^sample_mappings\\.dir\\.(\\S+)\\.(\\S+)\\.mapped\\.bam$")
-colnames(counts)[7:ncol(counts)]=m[,3]
+#check and reformat if it is a full feature counts output
+if(colnames(counts)[2] == "Chr"){
+  counts=counts[,c(1,6:ncol(counts))]
+}
 
 #remove extra columns and write out the raw counts
-raw=counts[,c(1,7:ncol(counts))]
+raw=counts[,c(1,3:ncol(counts))]
 colnames(raw)[1]=commandArgs(trailingOnly=T)[1]
 write.table(raw,commandArgs(trailingOnly=T)[4],sep="\t",row.names = F)
 
 #generate TPM normalised table
 #divide count by feature length
-lendiv=apply(counts[,7:ncol(counts)],2,function(x) x/(counts[,6]/1000))
+lendiv=apply(counts[,3:ncol(counts)],2,function(x) x/(counts[,2]/1000))
 #get per million scale per sample
 if(nrow(counts)>1){
 permil=colSums(lendiv)/1000000}else{

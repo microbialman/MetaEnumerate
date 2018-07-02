@@ -175,13 +175,13 @@ def mapSample(infile,outfile):
     P.run()
 
 #################################################################
-# Count reads mapping to each ORF annotation using featureCount
+# Count reads mapping to each ORF using featureCount
 #################################################################
 @follows(mapSample)
 @follows(mkdir("feature_counts.dir"))
-@originate(["feature_counts.dir/{}_counts.txt".format(x) for x in PARAMS["General_feature_list"].split(",")])
-def countFeatures(outfile):
-    feat = re.search("feature_counts.dir/(\S+)_counts.txt",outfile).group(1)
+@originate("feature_counts.dir/gene_id_counts.txt")
+def countOrfs(outfile):
+    feat = "gene_id"
     samplemappings = [x for x in glob.iglob('sample_mappings.dir/**/*.bam', recursive=True)]
     #get pairdness from first sample
     paired = True
@@ -193,24 +193,17 @@ def countFeatures(outfile):
     job_memory = str(PARAMS["featureCounts_memory"])+"G"
     statement = PipelineMetaEnumerate.countFeatures(feat,PARAMS["General_gtf_file"],paired,outfile,samplemappings,PARAMS)
     P.run()
-                     
 
-###############################################
-# Do counting for multimapping features
-###############################################
-@follows(countFeatures)
-@originate(["feature_counts.dir/{}_counts.txt".format(x) for x in PARAMS["General_multi_feature_list"].split(",")])
-def countMultiFeatures(outfile):
+#####################################################
+# Do counting for other features from gene_id counts
+#####################################################
+@follows(countOrfs)
+@originate(["feature_counts.dir/{}_counts.txt".format(x) for x in PARAMS["General_feature_list"].split(",")])
+def countFeatures(outfile):
     feat = re.search("feature_counts.dir/(\S+)_counts.txt",outfile).group(1)
-    samplemappings = [x for x in glob.iglob('sample_mappings.dir/**/*.bam', recursive=True)]
-    #get pairdness from first sample
-    paired = True
-    num_paired = subprocess.check_output(["samtools","view","-c","-f 1","{}".format(os.getcwd()+"/"+samplemappings[0])]).decode(sys.stdout.encoding)
-    if int(num_paired.strip("\n")) == 0:
-        paired = False
-    #generate counts per orf across all samples
-    job_threads = PARAMS["featureCounts_threads"]
-    job_memory = str(PARAMS["featureCounts_memory"])+"G"
+    #generate counts for other features from ORF counts
+    job_threads = PARAMS["featureCounts_threads_otherfeats"]
+    job_memory = str(PARAMS["featureCounts_memory_otherfeats"])+"G"
     statement = "python {}scripts/demultiFeat.py --orfinput {} --feature {} --gtf {} --output {}".format(os.path.dirname(__file__).rstrip("pipelines"),
                                                                                                                       "feature_counts.dir/gene_id_counts.txt",
                                                                                                                       feat,
@@ -218,24 +211,16 @@ def countMultiFeatures(outfile):
                                                                                                                       outfile)
     P.run()
 
-####################################
-# Mv feature count summary files
-####################################
-@follows(countMultiFeatures)
-@follows(mkdir("feature_count.summaries"))
-def mvSummaries():
-    statement = "mv feature_counts.dir/*.summary feature_count.summaries/"
-    P.run()
                  
 ##########################################
 # Format and normalise count tables
 #########################################
-@follows(mvSummaries)
 @follows(mkdir("formatted_counts.dir"))
 @follows(mkdir("formatted_counts.dir/raw_counts"))
 @follows(mkdir("formatted_counts.dir/normalised_counts"))
-@transform("./feature_counts.dir/*",regex(r"feature_counts.dir/(\S+)_counts.txt"),r"formatted_counts.dir/normalised_counts/\1_normalised_counts.tsv")
+@transform([countFeatures],regex(r"feature_counts.dir/(\S+)_counts.txt"),r"formatted_counts.dir/normalised_counts/\1_normalised_counts.tsv")
 def formatCounts(infile,outfile):
+    job_memory = str(PARAMS["normalise_memory"])+"G"
     statement = "Rscript {}scripts/formatCounts.R {} {} {} {}".format(os.path.dirname(__file__).rstrip("pipelines"),re.search("feature_counts.dir/(\S+)_counts.txt",infile).group(1),infile,outfile,outfile.replace("normalised","raw"))
     P.run()
     

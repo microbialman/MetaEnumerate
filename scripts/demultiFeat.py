@@ -1,5 +1,13 @@
 from argparse import ArgumentParser
-import re
+import numpy as np
+import os
+
+def logCount(counter):
+    c = counter+1
+    if c%1000000 == 0:
+        logfile.write(str(counter)+"\n")
+        logfile.flush()
+    return(c)
 
 #get the input and output files
 parser = ArgumentParser()
@@ -12,71 +20,79 @@ args = parser.parse_args()
 #open the files
 infile = open(args.infile,"rU")
 gtffile = open(args.gtf,"rU")
+logfile = open(os.path.dirname(args.outfile)+"/gtflog_"+os.path.basename(args.outfile),'w')
 outfile = open(args.outfile,"w")
 f = args.feat
 
-#get the feature to orf mapping from the gtf
-gtfdic = {}
+orfs={}
+feats={}
+
+logfile.write("Parsing GTF\n\n")
+logfile.flush()
+
+counter=0
+
+#parse the GTF to get the features
 for i in gtffile:
+    counter=logCount(counter)
     row = i.strip("\n").split("\t")
-    for j in row[-1].split(";"):
-        if j != "":
-            reg = re.search('^(\S+) \"(.*)\"$',j)
-            if reg.group(1) == "gene_id":
-                gtfdic[reg.group(2)]={}
-                orf = reg.group(2)
-            else:
-                gtfdic[orf][reg.group(1)]=reg.group(2)
+    start = int(row[3])
+    end = int(row[4])
+    length = end-start
+    orfdat = row[-1].split(";")
+    fval = ''
+    for j in range(len(orfdat)-1):
+        feature = orfdat[j].split('"')[0].replace(" ","")
+        if feature == "gene_id":
+            gid = orfdat[j].split('"')[1]
+            gid = gid.replace('"','')
+        if feature == f:
+            fval = orfdat[j].split('"')[1]
+            fval = fval.replace('"','')
+    if fval != '':
+        if gid not in orfs:
+            orfs[gid]=[]
+        for k in fval.split(","):
+            orfs[gid].append(k)
+            if k not in feats:
+                feats[k]={"length":0}
+            feats[k]["length"]+=length
 
-#dictionary to store unique features
-featdic = {}
-featlist = []
-
-#parse input, storing counts as list and total length of each feature
+logfile.write(str(counter))
+logfile.write("\n\nParsing counts\n\n")
+counter=0
+            
+#parse the counts file
+header = False
 for i in infile:
-    if i[0] == "#" or re.match("Geneid",i):
-        outfile.write(i)
+    counter=logCount(counter)
+    if i[0] == '#':
+        pass
+    elif header == False:
+        header = i.strip("\n").split("\t")
+        samples = header[6:]
+        #initiate an empty array of correct length in each feature
+        for k in feats:
+            feats[k]["counts"]=np.zeros(len(samples))
+    #for each orf add counts to its matching features
     else:
         row = i.strip("\n").split("\t")
-        geneid = row[0]
-        contigs = row[1]
-        starts = row[2]
-        ends = row[3]
-        strand = row[4]
-        length = row[5]
-        counts = row[6:]
-        if f in gtfdic[geneid]:
-            features = gtfdic[geneid][f].split(",")
-            for j in features:
-                if j in featdic:
-                    featdic[j]["contigs"]+=";"+contigs
-                    featdic[j]["starts"]+=";"+starts
-                    featdic[j]["ends"]+=";"+ends
-                    featdic[j]["strand"]+=";"+strand
-                    featdic[j]["length"]+=int(length)
-                    for k in range(len(featdic[j]["counts"])):
-                        featdic[j]["counts"][k] += int(counts[k])
-                else:
-                    featdic[j]={}
-                    featlist.append(j)
-                    featdic[j]["contigs"]=contigs
-                    featdic[j]["starts"]=starts
-                    featdic[j]["ends"]=ends
-                    featdic[j]["strand"]=strand
-                    featdic[j]["length"]=int(length)
-                    featdic[j]["counts"]=[int(x) for x in counts]
-             
-#write the parsed data to file
-for i in featlist:
-    outfile.write("\t".join([
-        i,
-        featdic[i]["contigs"],
-        featdic[i]["starts"],
-        featdic[i]["ends"],
-        featdic[i]["strand"],
-        str(featdic[i]["length"]),
-        "\t".join([str(x) for x in featdic[i]["counts"]])
-    ])+"\n")
+        orfid = row[0]
+        if orfid in orfs:
+            sampcounts = np.array(row[6:],dtype=int)
+            for j in orfs[orfid]:
+                feats[j]["counts"]+=sampcounts
+
+
+#write data to output
+outfile.write("{}\tLength\t{}\n".format(f,"\t".join(samples)))
+for i in feats:
+    strlist = np.char.mod('%f', feats[i]["counts"])
+    outfile.write("{}\t{}\t{}\n".format(i,feats[i]["length"],"\t".join(strlist)))
+    outfile.flush()
+
+logfile.write(str(counter))
+    
 outfile.close()
-        
-        
+logfile.close()
+                
