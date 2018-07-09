@@ -70,25 +70,25 @@ for i in infile:
         pass
     elif header == False:
         header = i.strip("\n").split("\t")
-        samples = header[6:]
+        samples = header[1:]
         #initiate an empty array of correct length in each feature
         for k in feats:
             feats[k]["counts"]=np.zeros(len(samples))
     #for each orf add counts to its matching features
     else:
         row = i.strip("\n").split("\t")
-        orfid = row[0]
+        orfid = row[0].replace('"','')
         if orfid in orfs:
-            sampcounts = np.array(row[6:],dtype=int)
+            sampcounts = np.array(row[1:],dtype=float)
             for j in orfs[orfid]:
                 feats[j]["counts"]+=sampcounts
 
 
 #write data to output
-outfile.write("{}\tLength\t{}\n".format(f,"\t".join(samples)))
+outfile.write("{}\t{}\n".format(f,"\t".join(samples)))
 for i in feats:
     strlist = np.char.mod('%f', feats[i]["counts"])
-    outfile.write("{}\t{}\t{}\n".format(i,feats[i]["length"],"\t".join(strlist)))
+    outfile.write("{}\t{}\n".format(i,"\t".join(strlist)))
     outfile.flush()
 
 logfile.write(str(counter))

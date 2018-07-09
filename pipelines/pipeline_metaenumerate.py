@@ -194,40 +194,77 @@ def countOrfs(outfile):
     statement = PipelineMetaEnumerate.countFeatures(feat,PARAMS["General_gtf_file"],paired,outfile,samplemappings,PARAMS)
     P.run()
 
-#####################################################
-# Do counting for other features from gene_id counts
-#####################################################
+################################################################
+# Generate formatted and TPM transformed ORF counts
+################################################################
 @follows(countOrfs)
-@originate(["feature_counts.dir/{}_counts.txt".format(x) for x in PARAMS["General_feature_list"].split(",")])
-def countFeatures(outfile):
-    feat = re.search("feature_counts.dir/(\S+)_counts.txt",outfile).group(1)
+@follows(mkdir("formatted_counts.dir"))
+@follows(mkdir("formatted_counts.dir/raw_counts"))
+@follows(mkdir("formatted_counts.dir/tpm_counts"))
+@split(countOrfs,["formatted_counts.dir/raw_counts/gene_id_raw.tsv","formatted_counts.dir/tpm_counts/gene_id_tpm.tsv"])
+def tpmOrfs(infile,outfiles):
+    job_memory = str(PARAMS["normalise_memory"])+"G"
+    job_threads = PARAMS["normalise_threads"]
+    statement = "Rscript {}scripts/tpmCounts.R {} {} {}".format(os.path.dirname(__file__).rstrip("pipelines"),infile[0],outfiles[0],outfiles[1])
+    P.run()
+
+#########################################################
+# Do counting for other features from gene_id raw counts
+#########################################################
+@follows(tpmOrfs)
+@originate(["formatted_counts.dir/raw_counts/{}_raw.tsv".format(x) for x in PARAMS["General_feature_list"].split(",")])
+def countRawFeatures(outfile):
+    feat = re.search("formatted_counts.dir/raw_counts/(\S+)_raw.tsv",outfile).group(1)
     #generate counts for other features from ORF counts
     job_threads = PARAMS["featureCounts_threads_otherfeats"]
     job_memory = str(PARAMS["featureCounts_memory_otherfeats"])+"G"
-    statement = "python {}scripts/demultiFeat.py --orfinput {} --feature {} --gtf {} --output {}".format(os.path.dirname(__file__).rstrip("pipelines"),
-                                                                                                                      "feature_counts.dir/gene_id_counts.txt",
+    statement = "python {}scripts/countFeat.py --orfinput {} --feature {} --gtf {} --output {}".format(os.path.dirname(__file__).rstrip("pipelines"),
+                                                                                                                      "formatted_counts.dir/raw_counts/gene_id_raw.tsv",
                                                                                                                       feat,
                                                                                                                       PARAMS["General_gtf_file"],
                                                                                                                       outfile)
     P.run()
 
-                 
-##########################################
-# Format and normalise count tables
-#########################################
-@follows(mkdir("formatted_counts.dir"))
-@follows(mkdir("formatted_counts.dir/raw_counts"))
-@follows(mkdir("formatted_counts.dir/normalised_counts"))
-@transform([countFeatures],regex(r"feature_counts.dir/(\S+)_counts.txt"),r"formatted_counts.dir/normalised_counts/\1_normalised_counts.tsv")
-def formatCounts(infile,outfile):
-    job_memory = str(PARAMS["normalise_memory"])+"G"
-    statement = "Rscript {}scripts/formatCounts.R {} {} {} {}".format(os.path.dirname(__file__).rstrip("pipelines"),re.search("feature_counts.dir/(\S+)_counts.txt",infile).group(1),infile,outfile,outfile.replace("normalised","raw"))
+#########################################################
+# Do counting for other features from gene_id tpm counts
+#########################################################
+@follows(tpmOrfs)
+@originate(["formatted_counts.dir/tpm_counts/{}_tpm.tsv".format(x) for x in PARAMS["General_feature_list"].split(",")])
+def countTpmFeatures(outfile):
+    feat = re.search("formatted_counts.dir/tpm_counts/(\S+)_tpm.tsv",outfile).group(1)
+    #generate counts for other features from ORF counts
+    job_threads = PARAMS["featureCounts_threads_otherfeats"]
+    job_memory = str(PARAMS["featureCounts_memory_otherfeats"])+"G"
+    statement = "python {}scripts/countFeat.py --orfinput {} --feature {} --gtf {} --output {}".format(os.path.dirname(__file__).rstrip("pipelines"),
+                                                                                                                      "formatted_counts.dir/tpm_counts/gene_id_tpm.tsv",
+                                                                                                                      feat,
+                                                                                                                      PARAMS["General_gtf_file"],
+                                                                                                                      outfile)
     P.run()
-    
-@follows(formatCounts)
+
+
+#######################################
+# Move out log files
+######################################
+@follows(countRawFeatures)
+@follows(countTpmFeatures)
+@follows(mkdir("count_logs.dir"))
+@originate(["count_logs.dir/gtflog_{}_raw.tsv".format(x) for x in PARAMS["General_feature_list"].split(",")])
+def moveLogs():
+    statement="mv -f formatted_counts.dir/*/gtflog* count_logs.dir/"
+    P.run()
+
+@follows(moveLogs)
 def full():
     pass
 
+
+@follows(mkdir("report.dir"))
+def build_report():
+    job_memory = str(PARAMS["report_memory"])+"G"
+    scriptloc = "/".join(os.path.dirname(sys.argv[0]).split("/")[0:-1])+"/scripts/enumeration_report.Rmd"
+    statement = 'R -e "rmarkdown::render(\'{}\',output_file=\'{}/report.dir/enumeration_report.html\')" --args {} {} {}'.format(scriptloc,os.getcwd(),PARAMS["report_readcounts"],os.getcwd()+"/formatted_counts.dir/raw_counts/gene_id_raw.tsv",os.getcwd()+"/formatted_counts.dir/raw_counts")
+    P.run()
 
 if __name__ == "__main__":
     if sys.argv[1] == "plot":
